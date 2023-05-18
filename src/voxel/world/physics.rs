@@ -1,9 +1,182 @@
-use std::ops::Neg;
+use super::ChunkShape;
+use crate::voxel::{storage::ChunkMap, Voxel};
+use bevy::{
+    ecs::schedule::BaseSystemSet,
+    prelude::*,
+    time::{
+        common_conditions::{on_fixed_timer, on_timer},
+        fixed_timestep,
+    },
+};
+use itertools::{iproduct, Itertools};
+use std::{ops::Neg, time::Duration};
 
-use bevy::prelude::*;
+pub const SIMULATION_STEP: f32 = 0.05;
+
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, SystemSet)]
+pub enum PhysicsSet {
+    Acceleration,
+    Velocity,
+    Drag,
+}
+
+pub struct PhysicsPlugin;
+
+impl Plugin for PhysicsPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(FixedTime::new_from_secs(SIMULATION_STEP))
+            .configure_sets(
+                (
+                    PhysicsSet::Acceleration,
+                    PhysicsSet::Velocity.ambiguous_with(PhysicsSet::Velocity),
+                    PhysicsSet::Drag,
+                )
+                    .chain()
+                    .in_base_set(CoreSet::FixedUpdate),
+            )
+            .add_system(apply_acceleration.in_set(PhysicsSet::Acceleration))
+            .add_systems(
+                (
+                    apply_velocity_for_colliders,
+                    apply_velocity_for_non_colliders,
+                )
+                    .in_set(PhysicsSet::Velocity),
+            )
+            .add_system(apply_drag.in_set(PhysicsSet::Drag));
+    }
+}
+
+fn apply_acceleration(mut objects: Query<(&Acceleration, &mut Velocity)>) {
+    for (a, mut v) in &mut objects {
+        **v += **a * SIMULATION_STEP;
+    }
+}
+
+fn apply_velocity_for_non_colliders(
+    mut objects: Query<(&Velocity, &mut Transform), Without<TerrainCollider>>,
+) {
+    for (v, mut t) in &mut objects {
+        t.translation += **v * SIMULATION_STEP;
+    }
+}
+
+fn apply_velocity_for_colliders(
+    mut objects: Query<(&TerrainCollider, &mut Velocity, &mut Transform)>,
+    voxels: Res<ChunkMap<Voxel, ChunkShape>>,
+) {
+    println!();
+    for (c, mut v, mut t) in &mut objects {
+        let aabb_half_extents = c.aabb_half_extents();
+        let mut displacement = Vec3::ZERO;
+        let mut time_remaining = SIMULATION_STEP;
+        for _ in 0..3 {
+            // at most 3 iterations, one for each axis
+            let center = t.translation;
+            let min = Vec3::min(
+                center - aabb_half_extents,
+                center - aabb_half_extents + **v * time_remaining,
+            )
+            .floor()
+            .as_ivec3();
+            let max = Vec3::max(
+                center + aabb_half_extents,
+                center + aabb_half_extents + **v * time_remaining,
+            )
+            .ceil()
+            .as_ivec3()
+                - 1;
+            if let Some(collision) = iproduct!(min.x..=max.x, min.y..=max.y, min.z..=max.z)
+                .map(|(x, y, z)| IVec3::new(x, y, z))
+                .filter(|voxel| voxels.voxel_at(*voxel).is_some_and(Voxel::collidable))
+                // .inspect(|voxel| println!("interested in {}", voxel))
+                .flat_map(|voxel| {
+                    c.cube_collision(
+                        &center,
+                        &v,
+                        &Cube {
+                            center: voxel.as_vec3() + Vec3::splat(0.5),
+                            radius: 0.5,
+                        },
+                        time_remaining,
+                    )
+                })
+                .inspect(|collision| println!("{:?}", collision))
+                .min_by(|a, b| a.time.total_cmp(&b.time))
+            {
+                displacement += **v * collision.time;
+                let p_v = **v;
+                // cancel velocity in the normal direction
+                **v -= Vec3::dot(p_v, collision.normal) * collision.normal;
+                time_remaining -= collision.time;
+            } else {
+                displacement += time_remaining * **v;
+                break; // no more steps needed
+            }
+        }
+        println!("{} += {}", t.translation, displacement);
+        t.translation += displacement;
+    }
+}
+
+fn apply_drag(mut objects: Query<(&Drag, &mut Acceleration)>) {
+    for (d, mut a) in &mut objects {
+        **a *= **d * SIMULATION_STEP;
+    }
+}
+
+#[derive(Clone, Copy, Component, Default, Debug, Deref, DerefMut)]
+pub struct Acceleration(pub Vec3);
+
+#[derive(Clone, Copy, Component, Default, Debug, Deref, DerefMut)]
+pub struct Velocity(pub Vec3);
+
+#[derive(Component, Debug)]
+/// A physics object which can collide with terrain.
+pub enum TerrainCollider {
+    Cylinder { radius: f32, half_height: f32 },
+}
+
+impl TerrainCollider {
+    /// returns the maximum block offset that could collide
+    fn aabb_half_extents(&self) -> Vec3 {
+        match self {
+            TerrainCollider::Cylinder {
+                radius,
+                half_height,
+            } => Vec3::new(*radius, *half_height, *radius),
+        }
+    }
+
+    fn cube_collision(
+        &self,
+        center: &Vec3,
+        velocity: &Vec3,
+        cube: &Cube,
+        simulation_step: f32,
+    ) -> Option<Collision> {
+        match self {
+            TerrainCollider::Cylinder {
+                radius,
+                half_height,
+            } => cylinder_cube_collision(
+                &Cylinder {
+                    center: *center,
+                    radius: *radius,
+                    half_height: *half_height,
+                },
+                velocity,
+                &cube,
+                simulation_step,
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Component, Debug, Deref, DerefMut)]
+pub struct Drag(pub f32);
 
 // Represents a capped cylinder aligned to the y-axis.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Cylinder {
     center: Vec3,
     radius: f32,
@@ -27,7 +200,7 @@ struct Collision {
 impl std::fmt::Debug for Collision {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // truncate the values to make snapshots cross-platform (since floating point errors are terrible)
-        let precision = f.precision().unwrap_or(3);
+        let precision = f.precision().unwrap_or(5);
         write!(
             f,
             "Collision {{\n\ttime: {:.*},\n\tnormal: Vec3(\n\t\tx: {:.*},\n\t\ty: {:.*},\n\t\tz: {:.*} \n\t),\n}}",
@@ -41,11 +214,6 @@ impl std::fmt::Debug for Collision {
             self.normal.z
         )
     }
-}
-
-/// System responsible for physics simulation.
-fn simulation_step() {
-
 }
 
 /// Returns whether the given cylinder and cube intersect.
@@ -91,7 +259,7 @@ fn cylinder_cube_collision(
     // assuming the cylinder moves with constant [velocity] and the two are initially not intersecting.
 
     if cylinder_cube_intersection(&cylinder, &cube) {
-        warn!("cylinder and cube are initially intersecting -- this is a physics bug!");
+        // panic!("cylinder and cube are initially intersecting -- this is a physics bug!");
         // no way to know the normal!
         // todo: should we find the nearest face and set the normal to resolve the collision that way?
         return None;
@@ -108,7 +276,7 @@ fn cylinder_cube_collision(
         None
     } else {
         // binary search for the last time of non-intersection
-        // invariant: low is non-intersecting.
+        // invariant: low is non-intersecting, high is intersecting.
         let (mut low, mut high) = (0., simulation_step);
         for _ in 0..MAX_ITER {
             if high - low < threshold {
@@ -138,13 +306,13 @@ fn cylinder_cube_collision(
             .into_iter()
             .enumerate()
             .find_map(|(axis, sgn)| {
-                let nudge = Vec3::AXES[axis] * sgn * threshold;
+                let nudge = Vec3::AXES[axis] * sgn * high;
                 let nudged_cyl = Cylinder {
                     center: center + nudge,
                     ..*cylinder
                 };
                 cylinder_cube_intersection(&nudged_cyl, &cube)
-                    .then(|| Vec3::AXES[axis] * (sgn.neg()))
+                    .then(|| Vec3::AXES[axis] * -sgn)
             })
             .expect("cylinder and cube collide, a normal could not be determined! this is a physics bug.");
 
@@ -177,17 +345,17 @@ mod test_cylinder_cube_collisions {
         assert_debug_snapshot!(
             cylinder_cube_collision(&CYLINDER, &Vec3::Y, &cube, 1.0),
             @r###"
-            Some(
-                Collision {
-                	time: 0.100,
-                	normal: Vec3(
-                		x: -0.000,
-                		y: -1.000,
-                		z: -0.000 
-                	),
-                },
-            )
-            "###
+        Some(
+            Collision {
+            	time: 0.10000,
+            	normal: Vec3(
+            		x: -0.00000,
+            		y: -1.00000,
+            		z: -0.00000 
+            	),
+            },
+        )
+        "###
         );
     }
 
@@ -202,17 +370,17 @@ mod test_cylinder_cube_collisions {
         assert_debug_snapshot!(
             cylinder_cube_collision(&CYLINDER, &Vec3::NEG_Y, &cube, 1.0),
             @r###"
-            Some(
-                Collision {
-                	time: 0.100,
-                	normal: Vec3(
-                		x: 0.000,
-                		y: 1.000,
-                		z: 0.000 
-                	),
-                },
-            )
-            "###
+        Some(
+            Collision {
+            	time: 0.10000,
+            	normal: Vec3(
+            		x: 0.00000,
+            		y: 1.00000,
+            		z: 0.00000 
+            	),
+            },
+        )
+        "###
         );
     }
 
@@ -227,17 +395,17 @@ mod test_cylinder_cube_collisions {
         assert_debug_snapshot!(
             cylinder_cube_collision(&CYLINDER, &Vec3::X, &cube, 1.0),
             @r###"
-            Some(
-                Collision {
-                	time: 0.600,
-                	normal: Vec3(
-                		x: -1.000,
-                		y: -0.000,
-                		z: -0.000 
-                	),
-                },
-            )
-            "###
+        Some(
+            Collision {
+            	time: 0.60000,
+            	normal: Vec3(
+            		x: -1.00000,
+            		y: -0.00000,
+            		z: -0.00000 
+            	),
+            },
+        )
+        "###
         );
     }
 
@@ -254,11 +422,11 @@ mod test_cylinder_cube_collisions {
             @r###"
         Some(
             Collision {
-            	time: 0.600,
+            	time: 0.60000,
             	normal: Vec3(
-            		x: 1.000,
-            		y: 0.000,
-            		z: 0.000 
+            		x: 1.00000,
+            		y: 0.00000,
+            		z: 0.00000 
             	),
             },
         )
@@ -279,11 +447,11 @@ mod test_cylinder_cube_collisions {
             @r###"
         Some(
             Collision {
-            	time: 0.600,
+            	time: 0.60000,
             	normal: Vec3(
-            		x: -0.000,
-            		y: -0.000,
-            		z: -1.000 
+            		x: -0.00000,
+            		y: -0.00000,
+            		z: -1.00000 
             	),
             },
         )
@@ -304,11 +472,11 @@ mod test_cylinder_cube_collisions {
             @r###"
         Some(
             Collision {
-            	time: 0.600,
+            	time: 0.60000,
             	normal: Vec3(
-            		x: 0.000,
-            		y: 0.000,
-            		z: 1.000 
+            		x: 0.00000,
+            		y: 0.00000,
+            		z: 1.00000 
             	),
             },
         )

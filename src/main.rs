@@ -7,7 +7,7 @@
 use std::f32::consts::PI;
 
 use bevy::{core_pipeline::fxaa::Fxaa, prelude::*};
-use voxel::player::{self, CameraMode};
+use voxel::{player::{self, CameraMode}, physics::{Acceleration, Velocity, Drag, TerrainCollider}};
 
 mod debug;
 mod voxel;
@@ -59,6 +59,10 @@ fn setup(
             local: Transform::from_xyz(2.0, 170.0, 2.0).looking_to(Vec3::Z, Vec3::Y),
             ..default()
         },
+        Acceleration::default(),
+        Velocity::default(),
+        Drag(0.98),
+        TerrainCollider::Cylinder { radius: 0.4, half_height: 0.9 }
     );
 
     let body_bundle = player::BodyBundle {

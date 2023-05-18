@@ -4,7 +4,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use crate::debug::DebugUISet;
 
-use super::chunks::LoadChunksAround;
+use super::{chunks::LoadChunksAround, physics::Acceleration};
 
 const BODY_ROTATION_SLERP: f32 = 0.5;
 
@@ -49,8 +49,6 @@ impl CameraMode {
     }
 }
 
-// Reusing the player controller impl for now.
-
 pub const DEFAULT_CAMERA_SENS: f32 = 0.005;
 
 fn handle_player_mouse_move(
@@ -82,16 +80,13 @@ fn handle_player_mouse_move(
 
 fn handle_player_keyboard_input(
     mut egui: EguiContexts,
-    // mut queries: ParamSet<Query<&mut Transform, With<Body>>>,
-    mut queries: ParamSet<(
-        Query<&mut Transform, With<Player>>,
-        Query<&Transform, With<Body>>,
-    )>,
+    mut player: Query<(&Transform, &mut Acceleration), With<Player>>,
     keys: Res<Input<KeyCode>>,
     btns: Res<Input<MouseButton>>,
     mut windows: Query<&mut Window>,
 ) {
     let mut window = windows.single_mut();
+    let (transform, mut acceleration) = player.single_mut();
 
     // cursor grabbing
     if btns.just_pressed(MouseButton::Left) && !egui.ctx_mut().wants_pointer_input() {
@@ -105,20 +100,10 @@ fn handle_player_keyboard_input(
         window.cursor.visible = true;
     }
 
-    let (forward, right) = {
-        let body = queries.p1();
-        let body_transform = body.single();
-        let forward = body_transform.rotation.mul_vec3(Vec3::Z).normalize();
-        let right = Vec3::Y.cross(forward); // @todo(meyerzinn): not sure why this is the correct orientation
-        (forward, right)
-    };
-
-    let mut body = queries.p0();
-    let mut body_transform = body.single_mut();
+    let forward = transform.rotation.mul_vec3(Vec3::Z).normalize();
+    let right = Vec3::Y.cross(forward); // @todo(meyerzinn): not sure why this is the correct orientation
 
     let mut direction = Vec3::ZERO;
-    let mut acceleration = 1.0f32;
-
     if keys.pressed(KeyCode::W) {
         direction.z -= 1.0;
     }
@@ -143,18 +128,11 @@ fn handle_player_keyboard_input(
         direction.y -= 1.0;
     }
 
-    if keys.pressed(KeyCode::LControl) {
-        acceleration *= 8.0;
-    }
-
     if direction == Vec3::ZERO {
         return;
     }
 
-    // hardcoding 0.10 as a factor for now to not go zoomin across the world.
-    body_transform.translation += direction.x * right * acceleration
-        + direction.z * forward * acceleration
-        + direction.y * Vec3::Y * acceleration;
+    **acceleration = direction.x * right + direction.z * forward + direction.y * Vec3::Y;
 }
 
 fn handle_player_change_camera_mode(

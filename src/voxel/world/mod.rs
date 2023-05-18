@@ -28,6 +28,7 @@ impl Plugin for VoxelWorldPlugin {
         app.insert_resource(ChunkMap::<Voxel, ChunkShape>::new(ChunkShape {}))
             .add_plugin(chunks::VoxelWorldChunkingPlugin)
             .add_plugin(meshing::VoxelWorldMeshingPlugin)
+            .add_plugin(physics::PhysicsPlugin)
             // ordering of plugin insertion matters here.
             .add_plugin(terraingen::TerrainGeneratorPlugin)
             .add_plugin(terrain::VoxelWorldTerrainGenPlugin)
