@@ -8,6 +8,7 @@ use super::{storage::ChunkMap, terraingen, Voxel};
 
 /// Systems for dynamically loading / unloading regions (aka chunks) of the world according to camera position.
 mod chunks;
+pub mod physics;
 pub use chunks::{
     ChunkCommandQueue, ChunkEntities, ChunkLoadRadius, CurrentLocalPlayerChunk, DirtyChunks,
 };

@@ -32,3 +32,6 @@ opt-level = 3
 
 [profile.release]
 lto = "thin"
+
+[dev-dependencies]
+insta = "1.29.0"
