@@ -32,6 +32,8 @@ fn setup(
     player
     ├── Player
     ├── TransformBundle
+    ├── ColliderBundle
+    ├── Drag 
     ├── VisibilityBundle
     ├── body
     │   └── BodyBundle
@@ -61,7 +63,7 @@ fn setup(
         },
         Acceleration::default(),
         Velocity::default(),
-        Drag(0.98),
+        // Drag(0.99998),
         TerrainCollider::Cylinder { radius: 0.4, half_height: 0.9 }
     );
 

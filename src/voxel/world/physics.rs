@@ -1,17 +1,17 @@
 use super::ChunkShape;
 use crate::voxel::{storage::ChunkMap, Voxel};
-use bevy::{
-    ecs::schedule::BaseSystemSet,
-    prelude::*,
-    time::{
-        common_conditions::{on_fixed_timer, on_timer},
-        fixed_timestep,
-    },
-};
-use itertools::{iproduct, Itertools};
-use std::{ops::Neg, time::Duration};
+use bevy::prelude::*;
+use itertools::iproduct;
 
 pub const SIMULATION_STEP: f32 = 0.05;
+
+#[derive(Bundle)]
+pub struct ColliderBundle {
+    pub acceleration: Acceleration,
+    pub velocity: Velocity,
+    pub transform: Transform,
+    pub collider: TerrainCollider,
+}
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, SystemSet)]
 pub enum PhysicsSet {
@@ -64,7 +64,6 @@ fn apply_velocity_for_colliders(
     mut objects: Query<(&TerrainCollider, &mut Velocity, &mut Transform)>,
     voxels: Res<ChunkMap<Voxel, ChunkShape>>,
 ) {
-    println!();
     for (c, mut v, mut t) in &mut objects {
         let aabb_half_extents = c.aabb_half_extents();
         let mut displacement = Vec3::ZERO;
@@ -88,7 +87,6 @@ fn apply_velocity_for_colliders(
             if let Some(collision) = iproduct!(min.x..=max.x, min.y..=max.y, min.z..=max.z)
                 .map(|(x, y, z)| IVec3::new(x, y, z))
                 .filter(|voxel| voxels.voxel_at(*voxel).is_some_and(Voxel::collidable))
-                // .inspect(|voxel| println!("interested in {}", voxel))
                 .flat_map(|voxel| {
                     c.cube_collision(
                         &center,
@@ -100,7 +98,6 @@ fn apply_velocity_for_colliders(
                         time_remaining,
                     )
                 })
-                .inspect(|collision| println!("{:?}", collision))
                 .min_by(|a, b| a.time.total_cmp(&b.time))
             {
                 displacement += **v * collision.time;
@@ -118,9 +115,9 @@ fn apply_velocity_for_colliders(
     }
 }
 
-fn apply_drag(mut objects: Query<(&Drag, &mut Acceleration)>) {
-    for (d, mut a) in &mut objects {
-        **a *= **d * SIMULATION_STEP;
+fn apply_drag(mut objects: Query<(&Drag, &mut Velocity)>) {
+    for (d, mut v) in &mut objects {
+        **v *= **d * SIMULATION_STEP;
     }
 }
 
