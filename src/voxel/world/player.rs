@@ -128,10 +128,6 @@ fn handle_player_keyboard_input(
         direction.y -= 1.0;
     }
 
-    if direction == Vec3::ZERO {
-        return;
-    }
-
     **acceleration = direction.x * right + direction.z * forward + direction.y * Vec3::Y;
 }
 

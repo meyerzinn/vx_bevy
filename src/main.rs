@@ -7,7 +7,7 @@
 use std::f32::consts::PI;
 
 use bevy::{core_pipeline::fxaa::Fxaa, prelude::*};
-use voxel::{player::{self, CameraMode}, physics::{Acceleration, Velocity, Drag, TerrainCollider}};
+use voxel::{player::{self, CameraMode}, physics::{Acceleration, Velocity, Drag, Collider3d}};
 
 mod debug;
 mod voxel;
@@ -63,8 +63,8 @@ fn setup(
         },
         Acceleration::default(),
         Velocity::default(),
-        // Drag(0.99998),
-        TerrainCollider::Cylinder { radius: 0.4, half_height: 0.9 }
+        Drag(0.98),
+        Collider3d::AxisAlignedCylinder { radius: 0.4, half_height: 0.9 }
     );
 
     let body_bundle = player::BodyBundle {
